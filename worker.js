@@ -176,8 +176,8 @@ function patrolData(html) {
     if (distance === null && /^\d+(?:[.,]\d+)?$/.test(String(c[ki] || "").trim())) {
       distance = Number(String(c[ki]).replace(",", "."));
     }
-    const timeMatch = raw.match(/\\b([01]?\\d|2[0-3]):[0-5]\\d\\b/);
-    const codeMatch = raw.match(/\\bKM\\d+\\/\\d+\\b/i);
+    const timeMatch = raw.match(/\b([01]?\d|2[0-3]):[0-5]\d\b/);
+    const codeMatch = raw.match(/\bKM\d+\/\d+\b/i);
     return {
       patrol: p ? `P${Number(p[1])}` : "",
       time: timeMatch ? timeMatch[0].padStart(5, "0") : "",
@@ -326,7 +326,7 @@ async function runMonitor(env) {
   const startDate = win.startDate.split("-").reverse().join("/");
   const lines = [`🌙 <b>Patrol Report</b> (Start: ${startDate} 23:00)`, ""];
   for (const row of validDistances) {
-    const number = Number((row.patrol.match(/\\d+/) || [0])[0]);
+    const number = Number((row.patrol.match(/\d+/) || [0])[0]);
     const timePart = row.time ? ` (${row.time})` : "";
     const codePart = row.code ? ` [${row.code}]` : "";
     lines.push(`•P ${number} → ${row.km} KM${timePart}${codePart}`, "");
