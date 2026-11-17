@@ -1,0 +1,9 @@
+{
+  "name": "rilapp-patrol-telegram",
+  "private": true,
+  "version": "1.0.0",
+  "description": "RILAPP patrolling report Telegram Cloudflare Worker",
+  "scripts": {
+    "check": "node --check worker.js"
+  }
+}
