@@ -24,26 +24,13 @@ function istParts(date = new Date()) {
 }
 
 function shiftWindow(now = new Date()) {
-  const p = istParts(now);
-  const hour = Number(p.hour);
-  const endDate = `${p.year}-${p.month}-${p.day}`;
-  const start = new Date(Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day)));
-  if (hour < 7 || (hour === 7 && Number(p.minute) <= 15)) start.setUTCDate(start.getUTCDate() - 1);
-  const startDate = [
-    start.getUTCFullYear(),
-    String(start.getUTCMonth() + 1).padStart(2, "0"),
-    String(start.getUTCDate()).padStart(2, "0"),
-  ].join("-");
+  const p = istParts(now), hour = Number(p.hour);
+  const endDate = p.year + "-" + p.month + "-" + p.day;
+  const start = new Date(Date.UTC(Number(p.year), Number(p.month)-1, Number(p.day)));
+  if (hour < 23) start.setUTCDate(start.getUTCDate()-1);
+  const startDate = [start.getUTCFullYear(),String(start.getUTCMonth()+1).padStart(2,"0"),String(start.getUTCDate()).padStart(2,"0")].join("-");
   const minute = Number(p.minute);
-  const inMorningWindow = hour < 7 || (hour === 7 && minute <= 15);
-  return {
-    active: hour >= 23 || inMorningWindow,
-    startDate,
-    endDate,
-    startTime: "23:00",
-    endTime: "07:15",
-    stamp: `${startDate} 23:00 – ${endDate} 07:15 IST`,
-  };
+  return {active:hour>=23||hour<7||(hour===7&&minute<=15),startDate,endDate,startTime:"23:00",endTime:p.hour+":"+p.minute,stamp:startDate+" 23:00 – "+endDate+" "+p.hour+":"+p.minute+" IST"};
 }
 
 function decodeHtml(s) {
@@ -106,33 +93,14 @@ function formDetails(html, pageUrl) {
 }
 
 function applyReportFilters(form, win) {
-  const p = form.fields;
-  let startFound = false;
-  let endFound = false;
-  for (const name of [...p.keys()]) {
-    const n = name.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (n === "category") p.set(name, "-PM");
-    if (n === "submit") p.set(name, "Update");
-
-    if (/start|from|begin/.test(n)) {
-      if (/time/.test(n)) p.set(name, win.startTime);
-      else if (/date/.test(n)) p.set(name, win.startDate);
-      else p.set(name, `${win.startDate} 23:00`);
-      startFound = true;
-    }
-    if (/end|to|upto|through/.test(n)) {
-      if (/time/.test(n)) p.set(name, win.endTime);
-      else if (/date/.test(n)) p.set(name, win.endDate);
-      else p.set(name, `${win.endDate} ${win.endTime}`);
-      endFound = true;
-    }
-  }
-  // Known RILAPP filter values. The form's own named controls take precedence.
-  if (!p.has("category")) p.set("category", "-PM");
-  if (!p.has("Submit")) p.set("Submit", "Update");
-  if (!startFound) p.set("start_time", win.startTime);
-  if (!endFound) p.set("end_time", win.endTime);
-  return p;
+  return new URLSearchParams({
+    fdate:win.startDate.split("-").reverse().join("/"),
+    ftime:"23:00",
+    tdate:win.endDate.split("-").reverse().join("/"),
+    ttime:win.endTime,
+    category:"-PM",
+    Submit:"Update"
+  });
 }
 
 function tableRows(html, tableId) {
@@ -149,62 +117,51 @@ function tableRows(html, tableId) {
   return { headers, rows };
 }
 
-function headerIndex(headers, patterns, fallback) {
-  const i = headers.findIndex(h => patterns.some(p => p.test(h)));
-  return i >= 0 ? i : fallback;
+function cleanAddress(value) {
+  let addr=String(value??"").toUpperCase().trim();
+  addr=addr.replace(/\/?C*H-?ALJN/g,"");
+  addr=addr.replace(/OHEHECTOMETERPOST/g,"KM");
+  addr=addr.replace(/CENTERLINEOFUNMANNEDLC/g,"फाटक");
+  addr=addr.replace(/UNMANNEDLC/g,"फाटक");
+  addr=addr.replace(/CENTERLINEOFLC/g,"फाटक");
+  addr=addr.replace(/CENTERLINEOF/g,"").replace(/-/g,"");
+  if(addr.startsWith("/"))addr=addr.slice(1);
+  return addr.trim();
 }
-
+function cleanName(value) {
+  const name=String(value??"");
+  try{return name.split("/")[1].split("#")[0].replace(/RG/g,"").trim();}
+  catch{return name;}
+}
+function getSortNumber(value) {
+  const m=String(value??"").match(/\d+/);
+  return m?Number(m[0]):9999;
+}
+function formatReportTime(value) {
+  const raw=String(value??"").trim();
+  const m=raw.match(/^\d{2}\/\d{2}\/\d{4}\s+(\d{2}:\d{2}):\d{2}$/);
+  return m?m[1]:raw;
+}
 function patrolData(html) {
-  const { headers, rows } = tableRows(html, "example");
-  const ni = headerIndex(headers, [/name|employee|patroller|staff/i], 1);
-  const ti = headerIndex(headers, [/time|date/i], 2);
-  const ai = headerIndex(headers, [/address|location|place|gps/i], 3);
-  const ki = headerIndex(headers, [/\bkm\b|kilomet|distance/i], Math.max(0, headers.length - 1));
-  const parsed = rows.map(c => {
-    const raw = c.join(" ");
-    const p = raw.match(/\bP\s*0?([1-9]|1\d|2[01])\b/i);
-    const distanceText = [c[ki] || "", raw].join(" | ");
-    const distancePatterns = [
-      /(?:KM\s*Run|Run\s*KM|History\s*Distance|Distance|Total\s*KM)\s*[:=-]?\s*(\d+(?:[.,]\d+)?)/i,
-      /(\d+(?:[.,]\d+)?)\s*(?:KM|Kms|Kilometers?)\b/i,
-    ];
-    let distance = null;
-    for (const re of distancePatterns) {
-      const match = distanceText.match(re);
-      if (match) { distance = Number(match[1].replace(",", ".")); break; }
-    }
-    if (distance === null && /^\d+(?:[.,]\d+)?$/.test(String(c[ki] || "").trim())) {
-      distance = Number(String(c[ki]).replace(",", "."));
-    }
-    const timeMatch = raw.match(/\b([01]?\d|2[0-3]):[0-5]\d\b/);
-    const codeMatch = raw.match(/\bKM\d+\/\d+\b/i);
-    return {
-      patrol: p ? `P${Number(p[1])}` : "",
-      time: timeMatch ? timeMatch[0].padStart(5, "0") : "",
-      code: codeMatch ? codeMatch[0] : "",
-      km: distance,
-    };
-  });
-  parsed.sort((a, b) => {
-    const an = Number((a.patrol.match(/\d+/) || [999])[0]);
-    const bn = Number((b.patrol.match(/\d+/) || [999])[0]);
-    return an - bn;
-  });
-  return { headers, rows: parsed };
+  const {rows}=tableRows(html,"example");
+  return rows.filter(c=>c.length>6&&String(c[4]??"").trim()).map(c=>({
+    name:cleanName(c[1]),km:String(c[6]??"").trim(),
+    time:formatReportTime(c[4]),addr:cleanAddress(c[5])
+  })).sort((a,b)=>getSortNumber(a.name)-getSortNumber(b.name));
 }
-
 function batteryData(html) {
-  const { headers, rows } = tableRows(html, "pmTable");
-  const bi = headerIndex(headers, [/battery|charge|percent|level/i], -1);
-  const ni = headerIndex(headers, [/name|device|employee|staff/i], 0);
-  const parsed = rows.map(c => {
-    const candidates = bi >= 0 ? [c[bi], ...c] : c;
-    const found = candidates.map(x => String(x).match(/(\d{1,3})\s*%/)).find(Boolean);
-    const pct = found ? Number(found[1]) : null;
-    return { name: c[ni] || "Device", percent: pct, text: c.join(" | ") };
-  }).filter(x => x.percent !== null && x.percent <= 50);
-  parsed.sort((a, b) => a.percent - b.percent);
-  return parsed;
+  const {rows}=tableRows(html,"pmTable"),low50=[],low35=[];
+  for(const c of rows){
+    if(c.length<=7)continue;
+    const rawName=String(c[1]??"").trim(),battText=String(c[7]??"").trim();
+    if(!rawName.includes("PM")&&!rawName.includes("P "))continue;
+    const m=battText.match(/\d+/);if(!m)continue;
+    const percent=Number(m[0]),name=cleanName(rawName);
+    if(percent<=35)low35.push(name);else if(percent<=50)low50.push(name);
+  }
+  low50.sort((a,b)=>getSortNumber(a)-getSortNumber(b));
+  low35.sort((a,b)=>getSortNumber(a)-getSortNumber(b));
+  return {low50,low35};
 }
 
 function splitMessage(text, max = 3800) {
@@ -315,39 +272,23 @@ async function runMonitor(env) {
     if (response.ok) filteredReport = await response.text();
   }
 
-  const patrol = patrolData(filteredReport);
-  const batteryPage = await fetchWithJar(BATTERY_URL, {}, jar);
-  if (!batteryPage.ok) throw new Error(`RILAPP battery page HTTP ${batteryPage.status}`);
-  const batteryHtml = await batteryPage.text();
-  const lowBatteries = batteryData(batteryHtml);
+  const patrol=patrolData(filteredReport);
+  if(!patrol.length)return {skipped:true,reason:"no_patrol_records"};
+  const batteryPage=await fetchWithJar(BATTERY_URL,{},jar);
+  if(!batteryPage.ok)throw new Error("RILAPP battery page HTTP "+batteryPage.status);
+  const battery=batteryData(await batteryPage.text());
+  const startDate=win.startDate.split("-").reverse().join("/");
+  const lines=["🌙 <b>Patrol Report</b> (Start: "+startDate+" 23:00)"];
+  for(const item of patrol)lines.push("•"+item.name+" → "+item.km+" KM ("+item.time+") ["+item.addr+"]");
+  const now=istParts();
+  lines.push("","🕒 Update: "+now.hour+":"+now.minute+":"+now.second);
+  if(battery.low50.length)lines.push("","⚠️ <b>बैटरी चेतावनी</b>\n"+battery.low50.join(",")+" की बैटरी 50% या उससे कम है कृपया चार्ज करें");
+  if(battery.low35.length)lines.push("","⛔ <b>CRITICAL BATTERY</b>\n"+battery.low35.join(",")+" की बैटरी 35% या उससे कम है कृपया चार्ज करें");
+  await sendTelegram(env,lines.join("\n"));
+  console.log("RILAPP patrol report sent",{patrolRows:patrol.length,low50:battery.low50.length,low35:battery.low35.length,time:win.stamp});
+  return {sent:true,patrolRows:patrol.length,low50:battery.low50.length,low35:battery.low35.length,time:win.stamp};
 
-  const validDistances = patrol.rows.filter(row => Number.isFinite(row.km));
-  const totalDistance = validDistances.reduce((sum, row) => sum + row.km, 0);
-  const startDate = win.startDate.split("-").reverse().join("/");
-  const lines = [`🌙 <b>Patrol Report</b> (Start: ${startDate} 23:00)`, ""];
-  for (const row of validDistances) {
-    const number = Number((row.patrol.match(/\d+/) || [0])[0]);
-    const timePart = row.time ? ` (${row.time})` : "";
-    const codePart = row.code ? ` [${row.code}]` : "";
-    lines.push(`•P ${number} → ${row.km} KM${timePart}${codePart}`, "");
-  }
-  const now = istParts();
-  lines.push(`🕒 Update: ${now.hour}:${now.minute}:${now.second}`, "");
-  lines.push(`📏 <b>Total Distance: ${totalDistance.toFixed(2)} KM</b>`);
-  lines.push(`Distance records: ${validDistances.length}/${patrol.rows.length}`, "");
-  lines.push("⚠️ <b>बैटरी चेतावनी</b>");
-  if (!lowBatteries.length) {
-    lines.push("कोई डिवाइस बैटरी 50% या उससे कम नहीं है।");
-  } else {
-    for (const item of lowBatteries) {
-      const level = item.percent <= 35 ? "⛔ CRITICAL" : "⚠️ WARNING";
-      lines.push(`${level} | ${item.name} | ${item.percent}%`);
-    }
-  }
-  const message = lines.join("\n");
-  await sendTelegram(env, message);
-  console.log("RILAPP patrol report sent", { patrolRows: patrol.rows.length, lowBatteries: lowBatteries.length, time: win.stamp });
-  return { sent: true, patrolRows: patrol.rows.length, distanceRecords: validDistances.length, totalDistanceKm: totalDistance, lowBatteries: lowBatteries.length, time: win.stamp };
+
 }
 
 export default {
