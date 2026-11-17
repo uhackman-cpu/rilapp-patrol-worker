@@ -1,6 +1,6 @@
 name = "rilapp-patrol-telegram"
 main = "worker.js"
-compatibility_date = "2026-11-18"
+compatibility_date = "2026-11-17"
 
 [triggers]
 crons = ["*/2 * * * *"]
