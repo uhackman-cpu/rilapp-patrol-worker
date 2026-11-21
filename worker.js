@@ -156,9 +156,12 @@ function patrolData(html) {
   for(const c of rows){
     // Source columns: Section, Device, Start Time, Start Address, End Time, End Address, KM Run
     if(c.length<=6||!String(c[4]??"").trim())continue;
-    const match=String(c[1]??"").match(/\bP\s*(\d{1,2})\s*#\s*(\d+)/i);
-    if(!match)continue;
-    const number=Number(match[1]),gpsId=match[2];
+    const device=String(c[1]??"");
+    // RILAPP commonly renders device as "—P2 (88295)"; also accept "P2#88295".
+    const numberMatch=device.match(/\bP\s*(\d{1,2})\b/i);
+    const gpsMatch=device.match(/(?:#|\()\s*(\d{4,})\s*\)?/);
+    if(!numberMatch||!gpsMatch)continue;
+    const number=Number(numberMatch[1]),gpsId=gpsMatch[1];
     if(number<1||number>21||!RG_PATROL_GPS_IDS.has(gpsId))continue;
     const rawTime=String(c[4]??"").trim();
     const item={number,name:"P"+number,km:String(c[6]??"").trim(),time:formatReportTime(rawTime),addr:cleanAddress(c[5])};
