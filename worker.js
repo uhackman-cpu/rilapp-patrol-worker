@@ -123,6 +123,7 @@ function cleanAddress(value) {
   addr=addr.replace(/OHEHECTOMETERPOST/g,"KM");
   addr=addr.replace(/CENTERLINEOFUNMANNEDLC/g,"फाटक");
   addr=addr.replace(/UNMANNEDLC/g,"फाटक");
+  addr=addr.replace(/CENTERLINE0FLC/g,"फाटक");
   addr=addr.replace(/CENTERLINEOFLC/g,"फाटक");
   addr=addr.replace(/CENTERLINEOF/g,"").replace(/-/g,"");
   if(addr.startsWith("/"))addr=addr.slice(1);
