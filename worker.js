@@ -133,6 +133,12 @@ function cleanName(value) {
   try{return name.split("/")[1].split("#")[0].replace(/RG/g,"").trim();}
   catch{return name;}
 }
+
+function patrolNumber(value) {
+  const raw=String(value??"");
+  const m=raw.match(/\bP\s*(\d{1,2})\b/i);
+  return m?Number(m[1]):null;
+}
 function getSortNumber(value) {
   const m=String(value??"").match(/\d+/);
   return m?Number(m[0]):9999;
@@ -144,10 +150,16 @@ function formatReportTime(value) {
 }
 function patrolData(html) {
   const {rows}=tableRows(html,"example");
-  return rows.filter(c=>c.length>6&&String(c[4]??"").trim()).map(c=>({
-    name:cleanName(c[1]),km:String(c[6]??"").trim(),
-    time:formatReportTime(c[4]),addr:cleanAddress(c[5])
-  })).sort((a,b)=>getSortNumber(a.name)-getSortNumber(b.name));
+  const latest=new Map();
+  for(const c of rows){
+    if(c.length<=6||!String(c[4]??"").trim())continue;
+    const number=patrolNumber(c[1]);
+    if(number===null||number<1||number>21)continue;
+    const item={number,name:"P"+number,km:String(c[6]??"").trim(),time:formatReportTime(c[4]),addr:cleanAddress(c[5])};
+    const old=latest.get(number);
+    if(!old||Date.parse(String(c[4]))>Date.parse(String(old.rawTime)))latest.set(number,{...item,rawTime:c[4]});
+  }
+  return [...latest.values()].sort((a,b)=>a.number-b.number);
 }
 function batteryData(html) {
   const {rows}=tableRows(html,"pmTable"),low50=[],low35=[];
@@ -225,16 +237,19 @@ async function fetchWithJar(url, init, jar) {
   throw new Error("Too many redirects from RILAPP");
 }
 
-async function runMonitor(env) {
+async function runMonitor(env, { force = false } = {}) {
   const missing = ["RILAPP_USERNAME", "RILAPP_PASSWORD", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"].filter(k => !env[k]);
   if (missing.length) {
     console.log("Monitor not configured; missing secrets:", missing.join(", "));
     return { skipped: true, missing };
   }
   const win = shiftWindow();
-  if (!win.active) {
-    console.log("Outside IST patrol window:", win.stamp);
-    return { skipped: true, reason: "outside_window", time: win.stamp };
+  const nowAtStart=istParts();
+  const hourAtStart=Number(nowAtStart.hour), minuteAtStart=Number(nowAtStart.minute);
+  const monitorWindow=(hourAtStart===22&&minuteAtStart>=50)||hourAtStart===23||hourAtStart<7||(hourAtStart===7&&minuteAtStart<=15);
+  if (!monitorWindow && !force) {
+    console.log("Outside IST GPS monitoring window:", nowAtStart.hour+":"+nowAtStart.minute);
+    return { skipped: true, reason: "outside_monitoring_window", time: nowAtStart.hour+":"+nowAtStart.minute };
   }
 
   const jar = new Map();
@@ -273,20 +288,24 @@ async function runMonitor(env) {
   }
 
   const patrol=patrolData(filteredReport);
-  if(!patrol.length)return {skipped:true,reason:"no_patrol_records"};
+  const byNumber=new Map(patrol.map(item=>[item.number,item]));
   const batteryPage=await fetchWithJar(BATTERY_URL,{},jar);
   if(!batteryPage.ok)throw new Error("RILAPP battery page HTTP "+batteryPage.status);
   const battery=batteryData(await batteryPage.text());
   const startDate=win.startDate.split("-").reverse().join("/");
-  const lines=["🌙 <b>Patrol Report</b> (Start: "+startDate+" 23:00)"];
-  for(const item of patrol)lines.push("•"+item.name+" → "+item.km+" KM ("+item.time+") ["+item.addr+"]");
+  const lines=["🚆 <b>GPS Patrol Report — P1 to P21</b>","📅 Start: "+startDate+" 23:00 IST","📡 GPS rows received: "+patrol.length+"/21",""];
+  for(let n=1;n<=21;n++){
+    const item=byNumber.get(n);
+    if(item)lines.push("• <b>P"+n+"</b> → "+item.km+" KM ("+item.time+") ["+item.addr+"]");
+    else lines.push("• <b>P"+n+"</b> → ⚪ GPS update नहीं मिला");
+  }
   const now=istParts();
   lines.push("","🕒 Update: "+now.hour+":"+now.minute+":"+now.second);
   if(battery.low50.length)lines.push("","⚠️ <b>बैटरी चेतावनी</b>\n"+battery.low50.join(",")+" की बैटरी 50% या उससे कम है कृपया चार्ज करें");
   if(battery.low35.length)lines.push("","⛔ <b>CRITICAL BATTERY</b>\n"+battery.low35.join(",")+" की बैटरी 35% या उससे कम है कृपया चार्ज करें");
   await sendTelegram(env,lines.join("\n"));
   console.log("RILAPP patrol report sent",{patrolRows:patrol.length,low50:battery.low50.length,low35:battery.low35.length,time:win.stamp});
-  return {sent:true,patrolRows:patrol.length,low50:battery.low50.length,low35:battery.low35.length,time:win.stamp};
+  return {sent:true,patrolRows:patrol.length,listedDevices:21,missingGPS:21-patrol.length,low50:battery.low50.length,low35:battery.low35.length,time:win.stamp};
 
 
 }
@@ -300,7 +319,9 @@ export default {
         worker: "rilapp-patrol-telegram",
         timezone: TZ,
         patrolWindow: "23:00-07:15",
-        cronExpected: "*/2 * * * *",
+        cronExpected: "* * * * *",
+        reportDevices: "P1-P21",
+        monitoringWindow: "22:50-07:15 IST",
         secretsConfigured: ["RILAPP_USERNAME", "RILAPP_PASSWORD", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"].every(k => Boolean(env[k])),
       });
     }
@@ -325,7 +346,7 @@ export default {
       try {
         await runMonitor(env);
       } catch (firstError) {
-        console.error("Scheduled RILAPP monitor failed; retrying in 60 seconds:", firstError?.message || String(firstError));
+        console.error("Scheduled RILAPP monitor failed; retrying in 30 seconds:", firstError?.message || String(firstError));
         await new Promise(resolve => setTimeout(resolve, 60_000));
         try {
           await runMonitor(env);
