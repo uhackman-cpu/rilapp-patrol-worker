@@ -176,6 +176,8 @@ function batteryData(html) {
   return {low50,low35};
 }
 
+function escapeHtml(value) { return String(value ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
 function splitMessage(text, max = 3800) {
   const out = [];
   let current = "";
@@ -198,7 +200,7 @@ async function sendTelegram(env, text) {
       body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: part, parse_mode: "HTML", disable_web_page_preview: true }),
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) throw new Error(`Telegram send failed: HTTP ${r.status}`);
+    if (!r.ok || !data.ok) throw new Error(`Telegram send failed: HTTP ${r.status}: ${data.description || "Unknown Telegram API error"}`);
   }
 }
 
@@ -296,13 +298,13 @@ async function runMonitor(env, { force = false } = {}) {
   const lines=["🚆 <b>GPS Patrol Report — P1 to P21</b>","📅 Start: "+startDate+" 23:00 IST","📡 GPS rows received: "+patrol.length+"/21",""];
   for(let n=1;n<=21;n++){
     const item=byNumber.get(n);
-    if(item)lines.push("• <b>P"+n+"</b> → "+item.km+" KM ("+item.time+") ["+item.addr+"]");
+    if(item)lines.push("• <b>P"+n+"</b> → "+escapeHtml(item.km)+" KM ("+escapeHtml(item.time)+") ["+escapeHtml(item.addr)+"]");
     else lines.push("• <b>P"+n+"</b> → ⚪ GPS update नहीं मिला");
   }
   const now=istParts();
   lines.push("","🕒 Update: "+now.hour+":"+now.minute+":"+now.second);
-  if(battery.low50.length)lines.push("","⚠️ <b>बैटरी चेतावनी</b>\n"+battery.low50.join(",")+" की बैटरी 50% या उससे कम है कृपया चार्ज करें");
-  if(battery.low35.length)lines.push("","⛔ <b>CRITICAL BATTERY</b>\n"+battery.low35.join(",")+" की बैटरी 35% या उससे कम है कृपया चार्ज करें");
+  if(battery.low50.length)lines.push("","⚠️ <b>बैटरी चेतावनी</b>\n"+battery.low50.map(escapeHtml).join(",")+" की बैटरी 50% या उससे कम है कृपया चार्ज करें");
+  if(battery.low35.length)lines.push("","⛔ <b>CRITICAL BATTERY</b>\n"+battery.low35.map(escapeHtml).join(",")+" की बैटरी 35% या उससे कम है कृपया चार्ज करें");
   await sendTelegram(env,lines.join("\n"));
   console.log("RILAPP patrol report sent",{patrolRows:patrol.length,low50:battery.low50.length,low35:battery.low35.length,time:win.stamp});
   return {sent:true,patrolRows:patrol.length,listedDevices:21,missingGPS:21-patrol.length,low50:battery.low50.length,low35:battery.low35.length,time:win.stamp};
