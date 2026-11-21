@@ -98,7 +98,7 @@ function applyReportFilters(form, win) {
     ftime:"23:00",
     tdate:win.endDate.split("-").reverse().join("/"),
     ttime:win.endTime,
-    category:"-PM",
+    category:"all",
     Submit:"Update"
   });
 }
@@ -148,16 +148,22 @@ function formatReportTime(value) {
   const m=raw.match(/^\d{2}\/\d{2}\/\d{4}\s+(\d{2}:\d{2}):\d{2}$/);
   return m?m[1]:raw;
 }
+const RG_PATROL_GPS_IDS = new Set(["88262","88295","88317","88319","88254","88802","88209","88349","83597","88336","87657","88638","88059","88208","88347","88147","88279","88244","88495","88243","88171"]);
+
 function patrolData(html) {
   const {rows}=tableRows(html,"example");
   const latest=new Map();
   for(const c of rows){
+    // Source columns: Section, Device, Start Time, Start Address, End Time, End Address, KM Run
     if(c.length<=6||!String(c[4]??"").trim())continue;
-    const number=patrolNumber(c[1]);
-    if(number===null||number<1||number>21)continue;
-    const item={number,name:"P"+number,km:String(c[6]??"").trim(),time:formatReportTime(c[4]),addr:cleanAddress(c[5])};
+    const match=String(c[1]??"").match(/\bP\s*(\d{1,2})\s*#\s*(\d+)/i);
+    if(!match)continue;
+    const number=Number(match[1]),gpsId=match[2];
+    if(number<1||number>21||!RG_PATROL_GPS_IDS.has(gpsId))continue;
+    const rawTime=String(c[4]??"").trim();
+    const item={number,name:"P"+number,km:String(c[6]??"").trim(),time:formatReportTime(rawTime),addr:cleanAddress(c[5])};
     const old=latest.get(number);
-    if(!old||Date.parse(String(c[4]))>Date.parse(String(old.rawTime)))latest.set(number,{...item,rawTime:c[4]});
+    if(!old||rawTime>old.rawTime)latest.set(number,{...item,rawTime});
   }
   return [...latest.values()].sort((a,b)=>a.number-b.number);
 }
